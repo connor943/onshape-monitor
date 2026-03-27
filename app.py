@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import statistics
 
+# ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="OnShape Connection Monitor",
     page_icon="📡",
@@ -14,14 +15,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Constants ─────────────────────────────────────────────────────────────────
 ONSHAPE_ENDPOINTS = {
     "Main App":     "https://cad.onshape.com",
     "API":          "https://cad.onshape.com/api/v6/users/sessioninfo",
-    "Static CDN":   "https://cad.onshape.com/fonts/roboto/Roboto-Regular.woff2",
+    "Static CDN":   "https://cad.onshape.com/favicon.ico",
 }
 
 MAX_HISTORY = 200
 
+# ── Session state bootstrap ───────────────────────────────────────────────────
 def init_state():
     defaults = {
         "history":      [],
@@ -35,6 +38,7 @@ def init_state():
 
 init_state()
 
+# ── Measurement logic ─────────────────────────────────────────────────────────
 def measure_endpoint(name: str, url: str, timeout: int = 10) -> dict:
     ts = datetime.datetime.now()
     try:
@@ -55,36 +59,59 @@ def measure_endpoint(name: str, url: str, timeout: int = 10) -> dict:
             "error":       None,
         }
     except requests.exceptions.Timeout:
-        return dict(timestamp=ts, endpoint=name, latency_ms=None,
-                    status_code=None, success=False, error="Timeout")
+        return {
+            "timestamp":   ts,
+            "endpoint":    name,
+            "latency_ms":  None,
+            "status_code": None,
+            "success":     False,
+            "error":       "Timeout",
+        }
     except requests.exceptions.ConnectionError:
-        return dict(timestamp=ts, endpoint=name, latency_ms=None,
-                    status_code=None, success=False, error="Connection Error")
+        return {
+            "timestamp":   ts,
+            "endpoint":    name,
+            "latency_ms":  None,
+            "status_code": None,
+            "success":     False,
+            "error":       "Connection Error",
+        }
     except Exception as e:
-        return dict(timestamp=ts, endpoint=name, latency_ms=None,
-                    status_code=None, success=False, error=str(e))
+        return {
+            "timestamp":   ts,
+            "endpoint":    name,
+            "latency_ms":  None,
+            "status_code": None,
+            "success":     False,
+            "error":       str(e),
+        }
 
-def run_checks(endpoints: dict, timeout: int) -> list[dict]:
+
+def run_checks(endpoints: dict, timeout: int) -> list:
     return [measure_endpoint(n, u, timeout) for n, u in endpoints.items()]
 
+
+# ── Colour helpers ────────────────────────────────────────────────────────────
 def latency_colour(ms):
-    if ms is None:   return "🔴"
-    if ms < 200:     return "🟢"
-    if ms < 600:     return "🟡"
+    if ms is None:  return "🔴"
+    if ms < 200:    return "🟢"
+    if ms < 600:    return "🟡"
     return "🔴"
 
 def quality_label(ms):
-    if ms is None:   return "❌ Failed"
-    if ms < 200:     return "✅ Excellent"
-    if ms < 400:     return "🟡 Good"
-    if ms < 800:     return "🟠 Fair"
+    if ms is None:  return "❌ Failed"
+    if ms < 200:    return "✅ Excellent"
+    if ms < 400:    return "🟡 Good"
+    if ms < 800:    return "🟠 Fair"
     return "🔴 Poor"
 
+
+# ── Sidebar controls ──────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ Settings")
     interval   = st.slider("Check interval (seconds)", 2, 60, 5)
     timeout    = st.slider("Request timeout (seconds)", 3, 30, 10)
-    max_points = st.slider("Max points on graph",       20, MAX_HISTORY, 60)
+    max_points = st.slider("Max points on graph", 20, MAX_HISTORY, 60)
 
     selected_eps = st.multiselect(
         "Endpoints to monitor",
@@ -102,7 +129,7 @@ with st.sidebar:
             st.session_state.running = False
 
     if st.button("🗑 Clear Data", use_container_width=True):
-        st.session_state.history   = []
+        st.session_state.history      = []
         st.session_state.total_checks = 0
         st.session_state.fail_count   = 0
 
@@ -110,25 +137,35 @@ with st.sidebar:
     st.markdown("**Status:** " + ("🟢 Running" if st.session_state.running else "🔴 Stopped"))
     st.markdown(f"**Total checks:** {st.session_state.total_checks}")
     uptime = (
-        f"{100*(1 - st.session_state.fail_count / max(st.session_state.total_checks,1)):.1f}%"
+        f"{100*(1 - st.session_state.fail_count / max(st.session_state.total_checks, 1)):.1f}%"
         if st.session_state.total_checks else "N/A"
     )
     st.markdown(f"**Uptime:** {uptime}")
 
+
+# ── Main layout ───────────────────────────────────────────────────────────────
 st.title("📡 OnShape Connection Speed Monitor")
 st.caption("Live latency tracking — auto-refreshes every check interval")
 
-metrics_ph  = st.empty()
-chart_ph    = st.empty()
-stats_ph    = st.empty()
-table_ph    = st.empty()
+metrics_ph = st.empty()
+chart_ph   = st.empty()
+stats_ph   = st.empty()
+table_ph   = st.empty()
 
-def build_figure(history: list[dict], max_points: int, selected_eps: list[str]):
-    df = pd.DataFrame(history).tail(max_points)
-    if df.empty:
+
+# ── Chart builder ─────────────────────────────────────────────────────────────
+def build_figure(history: list, max_points: int, selected_eps: list):
+    if not history:
         return go.Figure()
 
-    df = df[df["endpoint"].isin(selected_eps)]
+    df = pd.DataFrame(history)
+
+    # Guard: make sure expected columns exist
+    required = {"timestamp", "endpoint", "latency_ms", "success"}
+    if not required.issubset(df.columns):
+        return go.Figure()
+
+    df = df[df["endpoint"].isin(selected_eps)].tail(max_points * len(selected_eps))
 
     colours = {
         "Main App":   "#4A90D9",
@@ -181,9 +218,9 @@ def build_figure(history: list[dict], max_points: int, selected_eps: list[str]):
             row=2, col=1,
         )
 
-    fig.add_hrect(y0=0, y1=200,   fillcolor="green",  opacity=0.05, row=1, col=1, line_width=0)
-    fig.add_hrect(y0=200, y1=600, fillcolor="yellow", opacity=0.05, row=1, col=1, line_width=0)
-    fig.add_hrect(y0=600, y1=3000,fillcolor="red",    opacity=0.05, row=1, col=1, line_width=0)
+    fig.add_hrect(y0=0,   y1=200,  fillcolor="green",  opacity=0.05, row=1, col=1, line_width=0)
+    fig.add_hrect(y0=200, y1=600,  fillcolor="yellow", opacity=0.05, row=1, col=1, line_width=0)
+    fig.add_hrect(y0=600, y1=3000, fillcolor="red",    opacity=0.05, row=1, col=1, line_width=0)
 
     fig.update_layout(
         template="plotly_dark",
@@ -192,23 +229,29 @@ def build_figure(history: list[dict], max_points: int, selected_eps: list[str]):
         margin=dict(l=40, r=20, t=60, b=20),
         hovermode="x unified",
     )
-    fig.update_yaxes(title_text="ms",      row=1, col=1, rangemode="tozero")
-    fig.update_yaxes(title_text="OK",      row=2, col=1, range=[0, 1.2],
+    fig.update_yaxes(title_text="ms", row=1, col=1, rangemode="tozero")
+    fig.update_yaxes(title_text="OK", row=2, col=1, range=[0, 1.2],
                      tickvals=[0, 1], ticktext=["Fail", "OK"])
-    fig.update_xaxes(title_text="Time",    row=2, col=1)
+    fig.update_xaxes(title_text="Time", row=2, col=1)
 
     return fig
 
+
+# ── Metric cards ──────────────────────────────────────────────────────────────
 def render_metrics(history, selected_eps):
     if not history:
-        metrics_ph.info("No data yet — press ▶ Start")
+        metrics_ph.info("No data yet — press ▶ Start in the sidebar")
         return
 
-    df = pd.DataFrame(history).tail(60)
-    cols = metrics_ph.columns(len(selected_eps))
+    df = pd.DataFrame(history)
+    if "endpoint" not in df.columns:
+        return
+
+    df_recent = df.tail(60 * len(selected_eps))
+    cols = metrics_ph.columns(max(len(selected_eps), 1))
 
     for i, ep in enumerate(selected_eps):
-        sub = df[(df["endpoint"] == ep) & df["success"]]
+        sub = df_recent[(df_recent["endpoint"] == ep) & (df_recent["success"] == True)]
         latencies = sub["latency_ms"].dropna().tolist()
 
         if latencies:
@@ -221,38 +264,68 @@ def render_metrics(history, selected_eps):
         with cols[i]:
             st.metric(
                 label=f"{latency_colour(last)} {ep}",
-                value=f"{last:.0f} ms" if last else "N/A",
-                delta=f"avg {avg:.0f} ms | p95 {p95:.0f} ms" if avg else "no data",
+                value=f"{last:.0f} ms" if last is not None else "N/A",
+                delta=f"avg {avg:.0f} ms | p95 {p95:.0f} ms" if avg is not None else "no data",
             )
             st.caption(quality_label(last))
 
+
+# ── Stats table ───────────────────────────────────────────────────────────────
 def render_stats(history, selected_eps):
     if not history:
         return
+
     df = pd.DataFrame(history)
+    if "endpoint" not in df.columns:
+        return
+
     rows = []
     for ep in selected_eps:
         sub = df[df["endpoint"] == ep]
-        ok  = sub[sub["success"]]
+        ok  = sub[sub["success"] == True]
         latencies = ok["latency_ms"].dropna().tolist()
         rows.append({
-            "Endpoint":   ep,
-            "Checks":     len(sub),
-            "Failures":   int(sub["success"].eq(False).sum()),
-            "Uptime %":   f"{100*len(ok)/max(len(sub),1):.1f}",
-            "Min ms":     f"{min(latencies):.0f}"  if latencies else "–",
-            "Avg ms":     f"{statistics.mean(latencies):.0f}" if latencies else "–",
-            "Max ms":     f"{max(latencies):.0f}"  if latencies else "–",
-            "p95 ms":     f"{sorted(latencies)[int(len(latencies)*0.95)]:.0f}" if latencies else "–",
+            "Endpoint":  ep,
+            "Checks":    len(sub),
+            "Failures":  int((sub["success"] == False).sum()),
+            "Uptime %":  f"{100 * len(ok) / max(len(sub), 1):.1f}",
+            "Min ms":    f"{min(latencies):.0f}"  if latencies else "–",
+            "Avg ms":    f"{statistics.mean(latencies):.0f}" if latencies else "–",
+            "Max ms":    f"{max(latencies):.0f}"  if latencies else "–",
+            "p95 ms":    f"{sorted(latencies)[int(len(latencies) * 0.95)]:.0f}" if latencies else "–",
         })
-    stats_ph.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+    stats_ph.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+# ── Raw data table ────────────────────────────────────────────────────────────
 def render_table(history):
-    with table_ph.expander("📋 Raw data (last 50 rows)"):
-        df = pd.DataFrame(history).tail(50).sort_values("timestamp", ascending=False)
-        df["timestamp"] = df["timestamp"].dt.strftime("%H:%M:%S")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    if not history:
+        return
 
+    df = pd.DataFrame(history)
+
+    # Safety check — only sort if column exists
+    if "timestamp" not in df.columns:
+        with table_ph.expander("📋 Raw data (last 50 rows)"):
+            st.dataframe(df.tail(50), use_container_width=True, hide_index=True)
+        return
+
+    with table_ph.expander("📋 Raw data (last 50 rows)"):
+        df_display = (
+            df.tail(50)
+            .sort_values("timestamp", ascending=False)
+            .copy()
+        )
+        df_display["timestamp"] = df_display["timestamp"].dt.strftime("%H:%M:%S")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
 active_endpoints = {k: v for k, v in ONSHAPE_ENDPOINTS.items() if k in selected_eps}
 
 if st.session_state.running:
@@ -261,9 +334,12 @@ if st.session_state.running:
     st.session_state.total_checks += len(results)
     st.session_state.fail_count   += sum(1 for r in results if not r["success"])
 
-    if len(st.session_state.history) > MAX_HISTORY * len(ONSHAPE_ENDPOINTS):
-        st.session_state.history = st.session_state.history[-(MAX_HISTORY * len(ONSHAPE_ENDPOINTS)):]
+    # Trim history
+    max_stored = MAX_HISTORY * max(len(ONSHAPE_ENDPOINTS), 1)
+    if len(st.session_state.history) > max_stored:
+        st.session_state.history = st.session_state.history[-max_stored:]
 
+# Render (works whether running or stopped)
 render_metrics(st.session_state.history, selected_eps)
 chart_ph.plotly_chart(
     build_figure(st.session_state.history, max_points, selected_eps),
@@ -272,6 +348,7 @@ chart_ph.plotly_chart(
 render_stats(st.session_state.history, selected_eps)
 render_table(st.session_state.history)
 
+# Auto-rerun while running
 if st.session_state.running:
     time.sleep(interval)
     st.rerun()
