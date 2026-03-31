@@ -28,9 +28,9 @@ ONSHAPE_ENDPOINTS = {
 }
 
 DATA_DIR    = "data"
-MAX_DISPLAY = 200   # max points shown on graph at once
+MAX_DISPLAY = 200
 
-APP_URL_ENV = "STREAMLIT_APP_URL"  # set this in Streamlit Cloud secrets (optional)
+APP_URL_ENV = "STREAMLIT_APP_URL"
 
 # ── Data directory ────────────────────────────────────────────────────────────
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -45,7 +45,6 @@ CSV_COLUMNS = ["timestamp", "endpoint", "latency_ms", "status_code", "success", 
 
 # ── CSV helpers ───────────────────────────────────────────────────────────────
 def append_to_csv(records: list[dict]):
-    """Append a list of result dicts to today's CSV, creating it if needed."""
     df = pd.DataFrame(records, columns=CSV_COLUMNS)
     path = today_csv()
     write_header = not os.path.exists(path)
@@ -53,17 +52,18 @@ def append_to_csv(records: list[dict]):
 
 
 def load_csv(path: str) -> pd.DataFrame:
-    """Load a CSV log file and parse timestamps."""
     if not os.path.exists(path):
         return pd.DataFrame(columns=CSV_COLUMNS)
-    df = pd.read_csv(path, parse_dates=["timestamp"])
-    df["success"] = df["success"].astype(bool)
-    df["latency_ms"] = pd.to_numeric(df["latency_ms"], errors="coerce")
-    return df
+    try:
+        df = pd.read_csv(path, parse_dates=["timestamp"])
+        df["success"]    = df["success"].astype(bool)
+        df["latency_ms"] = pd.to_numeric(df["latency_ms"], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame(columns=CSV_COLUMNS)
 
 
 def load_today() -> list[dict]:
-    """Load today's CSV into a list of dicts for session state."""
     df = load_csv(today_csv())
     if df.empty:
         return []
@@ -71,22 +71,22 @@ def load_today() -> list[dict]:
 
 
 def available_dates() -> list[str]:
-    """Return sorted list of dates we have log files for."""
-    files = [f for f in os.listdir(DATA_DIR) if f.endswith(".csv")]
-    dates = sorted([f.replace(".csv", "") for f in files], reverse=True)
-    return dates
+    try:
+        files = [f for f in os.listdir(DATA_DIR) if f.endswith(".csv")]
+        return sorted([f.replace(".csv", "") for f in files], reverse=True)
+    except Exception:
+        return []
 
 
 # ── Session state bootstrap ───────────────────────────────────────────────────
 def init_state():
     if "history" not in st.session_state:
-        # Restore today's data on first load
         st.session_state.history = load_today()
 
     defaults = {
-        "running":      False,
-        "total_checks": len(st.session_state.get("history", [])),
-        "fail_count":   sum(
+        "running":           False,
+        "total_checks":      len(st.session_state.get("history", [])),
+        "fail_count":        sum(
             1 for r in st.session_state.get("history", [])
             if not r.get("success", True)
         ),
@@ -98,7 +98,6 @@ def init_state():
 
 
 init_state()
-
 
 # ── Keepalive bootstrap ───────────────────────────────────────────────────────
 if not st.session_state.keepalive_started:
@@ -164,7 +163,7 @@ COLOURS = {
 
 
 def build_figure(df: pd.DataFrame, selected_eps: list[str]) -> go.Figure:
-    if df.empty:
+    if df.empty or "endpoint" not in df.columns:
         fig = go.Figure()
         fig.update_layout(
             template="plotly_dark", height=480,
@@ -208,7 +207,6 @@ def build_figure(df: pd.DataFrame, selected_eps: list[str]) -> go.Figure:
             hovertemplate="%{x|%H:%M:%S}<extra></extra>",
         ), row=2, col=1)
 
-    # Quality bands
     fig.add_hrect(y0=0,   y1=200,  fillcolor="green",  opacity=0.05, row=1, col=1, line_width=0)
     fig.add_hrect(y0=200, y1=600,  fillcolor="yellow", opacity=0.05, row=1, col=1, line_width=0)
     fig.add_hrect(y0=600, y1=5000, fillcolor="red",    opacity=0.05, row=1, col=1, line_width=0)
@@ -276,7 +274,6 @@ with st.sidebar:
         st.session_state.history = load_today()
 
     if st.button("🗑 Clear display", use_container_width=True):
-        # Clears in-memory display only — CSV files are NOT deleted
         st.session_state.history      = []
         st.session_state.total_checks = 0
         st.session_state.fail_count   = 0
@@ -284,8 +281,8 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Status:** " + ("🟢 Running" if st.session_state.running else "🔴 Stopped"))
 
-    total = st.session_state.total_checks
-    fails = st.session_state.fail_count
+    total  = st.session_state.total_checks
+    fails  = st.session_state.fail_count
     uptime = f"{100 * (1 - fails / max(total, 1)):.1f}%" if total else "N/A"
     st.markdown(f"**Session checks:** {total}")
     st.markdown(f"**Session uptime:**  {uptime}")
@@ -317,7 +314,7 @@ with st.sidebar:
     else:
         st.caption("No logs yet.")
 
-    # ── Keepalive status ──────────────────────────────────────────────────
+    # ── Keepalive ─────────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("💓 Keepalive")
     app_url_input = st.text_input(
@@ -356,7 +353,7 @@ table_ph   = st.empty()
 
 # ── Render helpers ────────────────────────────────────────────────────────────
 def render_metrics(df: pd.DataFrame, selected_eps: list[str]):
-    if df.empty:
+    if df.empty or "endpoint" not in df.columns:
         metrics_ph.info("No data yet — press ▶ Start in the sidebar")
         return
 
@@ -379,6 +376,9 @@ def render_metrics(df: pd.DataFrame, selected_eps: list[str]):
 
 
 def render_chart(df: pd.DataFrame, max_points: int, selected_eps: list[str]):
+    if df.empty or "endpoint" not in df.columns:
+        chart_ph.plotly_chart(build_figure(df, selected_eps), use_container_width=True)
+        return
     display_df = df.tail(max_points * len(selected_eps))
     chart_ph.plotly_chart(
         build_figure(display_df, selected_eps),
@@ -387,7 +387,7 @@ def render_chart(df: pd.DataFrame, max_points: int, selected_eps: list[str]):
 
 
 def render_stats_table(df: pd.DataFrame, selected_eps: list[str]):
-    if df.empty:
+    if df.empty or "endpoint" not in df.columns:
         return
     stats_ph.dataframe(
         stats_df(df, selected_eps),
@@ -398,29 +398,23 @@ def render_stats_table(df: pd.DataFrame, selected_eps: list[str]):
 
 def render_raw_table(df: pd.DataFrame):
     with table_ph.expander("📋 Raw data (last 100 rows)"):
+        if df.empty or "timestamp" not in df.columns:
+            st.info("No data yet — press ▶ Start in the sidebar.")
+            return
         recent = df.tail(100).sort_values("timestamp", ascending=False).copy()
         recent["timestamp"] = recent["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
         st.dataframe(recent, use_container_width=True, hide_index=True)
 
 
-# ── Historical day view (in main area) ───────────────────────────────────────
+# ── Historical day view ───────────────────────────────────────────────────────
 dates = available_dates()
 if len(dates) > 1:
     with st.expander("📅 View a historical day"):
-        view_date = st.selectbox(
-            "Pick a date", dates, key="main_date_picker"
-        )
-        hist_df = load_csv(os.path.join(DATA_DIR, f"{view_date}.csv"))
-        if not hist_df.empty:
-            st.plotly_chart(
-                build_figure(hist_df, selected_eps),
-                use_container_width=True,
-            )
-            st.dataframe(
-                stats_df(hist_df, selected_eps),
-                use_container_width=True,
-                hide_index=True,
-            )
+        view_date = st.selectbox("Pick a date", dates, key="main_date_picker")
+        hist_df   = load_csv(os.path.join(DATA_DIR, f"{view_date}.csv"))
+        if not hist_df.empty and "endpoint" in hist_df.columns:
+            st.plotly_chart(build_figure(hist_df, selected_eps), use_container_width=True)
+            st.dataframe(stats_df(hist_df, selected_eps), use_container_width=True, hide_index=True)
         else:
             st.info("No data for this date.")
 
@@ -435,32 +429,31 @@ active_eps = {k: v for k, v in ONSHAPE_ENDPOINTS.items() if k in selected_eps}
 if st.session_state.running:
     results = run_checks(active_eps, timeout)
 
-    # ── Persist to CSV ────────────────────────────────────────────────────
     append_to_csv(results)
 
-    # ── Update in-memory state ────────────────────────────────────────────
     st.session_state.history.extend(results)
     st.session_state.total_checks += len(results)
     st.session_state.fail_count   += sum(1 for r in results if not r["success"])
 
-    # Keep display window manageable (CSV retains everything)
     trim_to = MAX_DISPLAY * len(ONSHAPE_ENDPOINTS) * 2
     if len(st.session_state.history) > trim_to:
         st.session_state.history = st.session_state.history[-trim_to:]
 
-# Build display dataframe from session state
-display_df = pd.DataFrame(st.session_state.history) if st.session_state.history else pd.DataFrame()
-if not display_df.empty:
-    display_df["timestamp"] = pd.to_datetime(display_df["timestamp"])
+# ── Build display dataframe ───────────────────────────────────────────────────
+if st.session_state.history:
+    display_df = pd.DataFrame(st.session_state.history)
+    display_df["timestamp"]  = pd.to_datetime(display_df["timestamp"])
     display_df["latency_ms"] = pd.to_numeric(display_df["latency_ms"], errors="coerce")
     display_df["success"]    = display_df["success"].astype(bool)
+else:
+    display_df = pd.DataFrame(columns=CSV_COLUMNS)
 
 render_metrics(display_df, selected_eps)
 render_chart(display_df, max_points, selected_eps)
 render_stats_table(display_df, selected_eps)
 render_raw_table(display_df)
 
-# Auto-rerun
+# ── Auto-rerun ────────────────────────────────────────────────────────────────
 if st.session_state.running:
     time.sleep(interval)
     st.rerun()
